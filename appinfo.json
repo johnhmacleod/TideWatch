@@ -1,0 +1,40 @@
+{
+    "appKeys": {
+        "KEY_CONFIG_LEVELS": 10,
+        "KEY_FLW_LEVEL": 9,
+        "KEY_GETTIDE": 3,
+        "KEY_HIGHLOW": 2,
+        "KEY_LAST_LEVEL": 6,
+        "KEY_NEXT_LEVEL": 7,
+        "KEY_NEXT_TIDE": 1,
+        "KEY_PC": 5,
+        "KEY_READY": 4
+    },
+    "capabilities": [
+        "configurable"
+    ],
+    "companyName": "John MacLeod",
+    "longName": "Segment Six",
+    "projectType": "native",
+    "resources": {
+        "media": [
+            {
+                "file": "images/menu_icon_sector_watch.png",
+                "menuIcon": true,
+                "name": "IMAGE_MENU_ICON",
+                "type": "png"
+            }
+        ]
+    },
+    "sdkVersion": "3",
+    "shortName": "TideWatch",
+    "targetPlatforms": [
+        "aplite",
+        "basalt"
+    ],
+    "uuid": "3f4c1cf3-2f61-4213-b157-039fd9721f82",
+    "versionLabel": "2.7",
+    "watchapp": {
+        "watchface": true
+    }
+}
