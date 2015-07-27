@@ -9,6 +9,27 @@
 #define KEY_FLW_LEVEL 9
 #define KEY_CONFIG_LEVELS 10
   
+#define ANIMATION_DURATION 500
+#define ANIMATION_DELAY    600
+#define FINAL_RADIUS 60
+#define RISING_OFFSET 20
+int rising_offset = RISING_OFFSET;
+  
+  
+bool s_animating = false;
+int s_radius;
+int s_anim_next_tide;
+int s_anim_angle;
+
+static void do_animation();
+static void rising_offset_update(Animation *anim, AnimationProgress dist_normalized);
+static void tide_radius_update(Animation *anim, AnimationProgress dist_normalized);
+static void bezel_update(Animation *anim, AnimationProgress dist_normalized);
+static void tide_hand_update(Animation *anim, AnimationProgress dist_normalized);
+static void animate(int duration, int delay, AnimationImplementation *implementation, bool handlers);
+
+
+
 static const char* tide_labels[] = {"5", "4", "3", "2", "1" };  
 static const GRect tide_pos1[] = {{{90,27},{18,18}}, {{109,43},{18,18}}, {{118,72},{18,18}}, {{110,97},{18,18}}, {{90,117},{18,18}}};
 static const GRect tide_pos2[] = {{{40,117},{18,18}}, {{18,98},{18,18}}, {{13,72},{18,18}}, {{19,43},{18,18}}, {{40,27},{18,18}}};
@@ -57,9 +78,29 @@ static Layer *s_minute_display_layer, *s_hour_display_layer, *s_segment_layer;
 static GPath *s_minute_segment_path, *s_hour_segment_path;
 
 static void paint(GContext *ctx, GPath *path, int angle, GColor colour) {
+  angle = (s_animating ? (angle - (360 - s_anim_angle)) : angle);
   gpath_rotate_to(path, (TRIG_MAX_ANGLE / 360) * angle);
   graphics_context_set_fill_color(ctx, colour);
   gpath_draw_filled(ctx, path);
+}
+
+
+void bt_handler(bool connected) {
+  // Vibe pattern: ON for 200ms, OFF for 100ms, ON for 400ms:
+static const uint32_t const segments[] = { 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50, 100, 50};
+VibePattern pat = {
+  .durations = segments,
+  .num_segments = ARRAY_LENGTH(segments),
+};
+  if (connected) {
+    // APP_LOG(APP_LOG_LEVEL_INFO, "Phone is connected!");
+    vibes_double_pulse();
+    request_tide();
+  } else {
+    // APP_LOG(APP_LOG_LEVEL_INFO, "Phone is not connected!");
+    // vibes_short_pulse();
+    vibes_enqueue_custom_pattern(pat);
+  }
 }
 
 static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
@@ -77,7 +118,7 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
 static void handle_second_tick(struct tm *tick_time, TimeUnits units_changed) {
   static int showingLevels = -1;
   if (levelsAlways)
-      tick_timer_service_subscribe(MINUTE_UNIT, handle_second_tick);
+      tick_timer_service_subscribe(MINUTE_UNIT, handle_minute_tick);
   if (showLevels && showingLevels == -1) {
     showingLevels = 5;
   }
@@ -87,7 +128,7 @@ static void handle_second_tick(struct tm *tick_time, TimeUnits units_changed) {
   else if (showLevels && showingLevels == 0) {
     showLevels = false;
     showingLevels = -1;
-    tick_timer_service_subscribe(MINUTE_UNIT, handle_second_tick);
+    tick_timer_service_subscribe(MINUTE_UNIT, handle_minute_tick);
     layer_mark_dirty(s_segment_layer);
   }
   if ((units_changed & MINUTE_UNIT) != 0)
@@ -107,6 +148,9 @@ static void segment_update_proc(Layer *layer, GContext* ctx) {
   int hour = t->tm_hour % 12;
   int minute = t->tm_min;
 
+  int s_mode_next_tide = (s_animating ? s_anim_next_tide : next_tide);
+  int s_mode_radius = (s_animating ? s_radius : FINAL_RADIUS);
+  
   bool fillb = true;
   for (unsigned int i = 15; i < 375; i += 30) {
     fillb = !fillb;
@@ -168,13 +212,13 @@ static void segment_update_proc(Layer *layer, GContext* ctx) {
     if (showLevels || levelsAlways) {
     
     if (highlow[0] == 'H') {
-      graphics_draw_text(ctx, "Rising", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(33,100,80,18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      graphics_draw_text(ctx, "Rising", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(33,100+(RISING_OFFSET - rising_offset),80,18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
       graphics_draw_text(ctx, nlvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(0,0,50,18), GTextOverflowModeFill, GTextAlignmentLeft, NULL);  
       graphics_draw_text(ctx, nlvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(94,0,50,18), GTextOverflowModeFill, GTextAlignmentRight, NULL);
       graphics_draw_text(ctx, llvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(0,140,50,18), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
       graphics_draw_text(ctx, flvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(94,140,50,18), GTextOverflowModeFill, GTextAlignmentRight, NULL);  
     } else {
-      graphics_draw_text(ctx, "Falling", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(33,100,80,18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      graphics_draw_text(ctx, "Falling", fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(33,100-(RISING_OFFSET - rising_offset),80,18), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
       graphics_draw_text(ctx, flvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(0,0,50,18), GTextOverflowModeFill, GTextAlignmentLeft, NULL);  
       graphics_draw_text(ctx, llvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(94,0,50,18), GTextOverflowModeFill, GTextAlignmentRight, NULL);
       graphics_draw_text(ctx, nlvl, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GRect(0,140,50,18), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
@@ -182,29 +226,30 @@ static void segment_update_proc(Layer *layer, GContext* ctx) {
     }
   }
       
-    
+  if (s_mode_next_tide > 0) {
   // Draw the tide hand
+  
   #ifdef PBL_COLOR
   graphics_context_set_stroke_color(ctx, GColorRed);
-  graphics_context_set_stroke_width(ctx, 5);
+  graphics_context_set_stroke_width(ctx, 6);
   #else
   graphics_context_set_stroke_color(ctx, GColorWhite);
   #endif
   
-int nt = next_tide > 360 ? 360 : next_tide;
+int nt = s_mode_next_tide > 360 ? 360 : s_mode_next_tide;
 
   if (highlow[0] == 'L')
     nt = nt + 360;
 
     GPoint tidepc_hand = (GPoint) {
-    .x = (int16_t)(-sin_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(60 * pc / 100.0) / TRIG_MAX_RATIO) + center.x,
-    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(60 * pc / 100.0) / TRIG_MAX_RATIO) + center.y,
+    .x = (int16_t)(-sin_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(s_mode_radius * pc / 100.0) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(s_mode_radius * pc / 100.0) / TRIG_MAX_RATIO) + center.y,
   };
 
    
   GPoint tide_hand = (GPoint) {
-    .x = (int16_t)(-sin_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(60) / TRIG_MAX_RATIO) + center.x,
-    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(60) / TRIG_MAX_RATIO) + center.y,
+    .x = (int16_t)(-sin_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(s_mode_radius) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * nt / 720) * (int32_t)(s_mode_radius) / TRIG_MAX_RATIO) + center.y,
   };
 #ifdef PBL_COLOR 
   graphics_draw_line(ctx, center, tide_hand); 
@@ -230,22 +275,34 @@ int nt = next_tide > 360 ? 360 : next_tide;
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_circle(ctx, tidepc_hand, 1);
   #endif
-
+  }
 //  graphics_draw_line(ctx, center, tidepc_hand);
   
   graphics_context_set_stroke_color(ctx, GColorWhite);
-  #ifdef PBL_COLOR
-  graphics_context_set_stroke_width(ctx, 2);
-  #endif
 
+  
+    
+    
+    
+    
+  //
   // Draw the hour hand & tail
+  //
   GPoint hour_hand = (GPoint) {
     .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * (hour / 12.0 + minute / 720.0)) * (int32_t)(30) / TRIG_MAX_RATIO) + center.x,
     .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * (hour / 12.0 + minute / 720.0)) * (int32_t)(30) / TRIG_MAX_RATIO) + center.y,
   };
   // APP_LOG(APP_LOG_LEVEL_INFO, "x: %d y: %d next_tide: %d", (int) tide_hand.x, (int) tide_hand.y, next_tide);
   #ifdef PBL_COLOR
-        graphics_draw_line(ctx, center, hour_hand);
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_context_set_stroke_width(ctx, 6);
+  GPoint hour_hand_offset = (GPoint) {
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * (hour / 12.0 + minute / 720.0)) * (int32_t)(15) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * (hour / 12.0 + minute / 720.0)) * (int32_t)(15) / TRIG_MAX_RATIO) + center.y,
+  };
+  graphics_draw_line(ctx, hour_hand_offset, hour_hand);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, center, hour_hand_offset);
   #else  
   for (int x=0; x<2; x++)
     for (int y=0; y<2; y++)
@@ -253,47 +310,76 @@ int nt = next_tide > 360 ? 360 : next_tide;
   #endif
     
   hour_hand = (GPoint) {
-    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * (((hour+6)%12) / 12.0 + minute / 720.0)) * (int32_t)(10) / TRIG_MAX_RATIO) + center.x,
-    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * (((hour+6)%12) / 12.0 + minute / 720.0)) * (int32_t)(10) / TRIG_MAX_RATIO) + center.y,
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * (((hour + 6) % 12) / 12.0 + minute / 720.0)) * (int32_t)(10) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * (((hour + 6) % 12) / 12.0 + minute / 720.0)) * (int32_t)(10) / TRIG_MAX_RATIO) + center.y,
   };
   // APP_LOG(APP_LOG_LEVEL_INFO, "x: %d y: %d next_tide: %d", (int) tide_hand.x, (int) tide_hand.y, next_tide);
   #ifdef PBL_COLOR
-  graphics_draw_line(ctx, center, hour_hand);
+  // graphics_draw_line(ctx, center, hour_hand);
   #else
   for (int x=0; x<2; x++)
     for (int y=0; y<2; y++)
         graphics_draw_line(ctx, GPoint(center.x+x-1, center.y+y-1), GPoint(hour_hand.x+x-1,hour_hand.y+y-1));
   #endif  
+    
+    
   
   // Draw the minute hand
   GPoint minute_hand = (GPoint) {
-    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(40) / TRIG_MAX_RATIO) + center.x,
-    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(40) / TRIG_MAX_RATIO) + center.y,
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(50) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(50) / TRIG_MAX_RATIO) + center.y,
   };
+  
+  
   //APP_LOG(APP_LOG_LEVEL_INFO, "x: %d y: %d next_tide: %d", (int) tide_hand.x, (int) tide_hand.y, next_tide);
   #ifdef PBL_COLOR
-  graphics_draw_line(ctx, center, minute_hand);
+  GPoint minute_hand_offset = (GPoint) {
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(15) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(15) / TRIG_MAX_RATIO) + center.y,
+  };
+  graphics_context_set_stroke_width(ctx, 6);
+  graphics_draw_line(ctx, minute_hand_offset, minute_hand);
+  
+  // Draw thin line for minutes
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, center, minute_hand_offset);
+  minute_hand_offset = (GPoint) {
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(18) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(18) / TRIG_MAX_RATIO) + center.y,
+  };
+  minute_hand = (GPoint) {
+    .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(45) / TRIG_MAX_RATIO) + center.x,
+    .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * minute / 60) * (int32_t)(45) / TRIG_MAX_RATIO) + center.y,
+  };
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_line(ctx, minute_hand_offset, minute_hand);
   #else
   for (int x=0; x<2; x++)
     for (int y=0; y<2; y++)
         graphics_draw_line(ctx, GPoint(center.x+x-1, center.y+y-1), GPoint(minute_hand.x+x-1,minute_hand.y+y-1));
   #endif    
-  
+    
+    
+  // Draw the minute tail
   minute_hand = (GPoint) {
     .x = (int16_t)(sin_lookup(TRIG_MAX_ANGLE * ((minute+30)%60) / 60) * (int32_t)(10) / TRIG_MAX_RATIO) + center.x,
     .y = (int16_t)(-cos_lookup(TRIG_MAX_ANGLE * ((minute+30)%60) / 60) * (int32_t)(10) / TRIG_MAX_RATIO) + center.y,
   };
-  //APP_LOG(APP_LOG_LEVEL_INFO, "x: %d y: %d next_tide: %d", (int) tide_hand.x, (int) tide_hand.y, next_tide);
-  
-  
   #ifdef PBL_COLOR
-  graphics_draw_line(ctx, center, minute_hand);
+  //graphics_draw_line(ctx, center, minute_hand);
+    
   #else
   for (int x=0; x<2; x++)
     for (int y=0; y<2; y++)
         graphics_draw_line(ctx, GPoint(center.x+x-1, center.y+y-1), GPoint(minute_hand.x+x-1,minute_hand.y+y-1));
   #endif    
-  
+    
+    
+    
+    
+    
+    
   // White circle in the middle
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_circle(ctx, center, 4); // White circle in the middle
@@ -305,7 +391,8 @@ int nt = next_tide > 360 ? 360 : next_tide;
 static void tap_handler(AccelAxisType axis, int32_t direction) {
   showLevels = true;
   tick_timer_service_subscribe(SECOND_UNIT | MINUTE_UNIT, handle_second_tick);
-  layer_mark_dirty(s_segment_layer);
+  do_animation();
+  // layer_mark_dirty(s_segment_layer);
 }
 
 static void inbox_dropped_callback(AppMessageResult reason, void *context) {
@@ -320,13 +407,39 @@ static void outbox_sent_callback(DictionaryIterator *iterator, void *context) {
   APP_LOG(APP_LOG_LEVEL_INFO, "Outbox send success!");
 }
 
+static void do_animation() {
+if (!s_animating) {   
+  // Implementations need to be static
+      static AnimationImplementation bezel_impl = {
+        .update = bezel_update
+      };
+      animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &bezel_impl, false);
+
+      static AnimationImplementation rising_offset_impl = {
+        .update = rising_offset_update
+      };
+      animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &rising_offset_impl, false);
+        
+      static AnimationImplementation radius_impl = {
+        .update = tide_radius_update
+      };
+      animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &radius_impl, false);
+    
+      static AnimationImplementation hand_impl = {
+        .update = tide_hand_update
+      };
+      animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &hand_impl, true);
+      }
+}
+
+
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
   // Store incoming information
 //APP_LOG(APP_LOG_LEVEL_INFO, "Message");
   // Read first item
   Tuple *t = dict_read_first(iterator);
           DictionaryIterator *iter;
-
+  showLevels = true;
   // For all items
   while(t != NULL) {
     // Which key was received?
@@ -334,6 +447,8 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     case KEY_NEXT_TIDE:
       next_tide = (int)t->value->int32;
       APP_LOG(APP_LOG_LEVEL_INFO, "NextTide: %d", (int)t->value->int32);
+      // Prepare animations
+      do_animation();
       break;
     case KEY_HIGHLOW:
       snprintf(highlow, sizeof(highlow), t->value->cstring);
@@ -378,8 +493,11 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     // Look for next item
     t = dict_read_next(iterator);
   }
-  showLevels = true;
-  layer_mark_dirty(s_segment_layer);
+//  s_animating = true;
+//  s_radius = FINAL_RADIUS / 2;
+//  s_anim_next_tide = 330;
+
+  // layer_mark_dirty(s_segment_layer);
   
 }
 
@@ -457,14 +575,14 @@ static void init() {
   window_stack_push(s_main_window, true);
 
   // tick_timer_service_subscribe(MINUTE_UNIT, handle_minute_tick);
-  
+    bluetooth_connection_service_subscribe(bt_handler);
     tick_timer_service_subscribe(SECOND_UNIT | MINUTE_UNIT, handle_second_tick);
 
 }
 
 static void deinit() {
   window_destroy(s_main_window);
-
+  bluetooth_connection_service_unsubscribe();
   tick_timer_service_unsubscribe();
 }
 
@@ -473,3 +591,72 @@ int main() {
   app_event_loop();
   deinit();
 }
+
+
+
+// Animation Stuff
+
+static void animation_started(Animation *anim, void *context) {
+  s_animating = true;
+}
+
+static void animation_stopped(Animation *anim, bool stopped, void *context) {
+  s_animating = false;
+}
+
+static void animate(int duration, int delay, AnimationImplementation *implementation, bool handlers) {
+  Animation *anim = animation_create();
+  animation_set_duration(anim, duration);
+  animation_set_delay(anim, delay);
+  animation_set_curve(anim, AnimationCurveEaseInOut);
+  animation_set_implementation(anim, implementation);
+  if(handlers) {
+    animation_set_handlers(anim, (AnimationHandlers) {
+      .started = animation_started,
+      .stopped = animation_stopped
+    }, NULL);
+  }
+  animation_schedule(anim);
+}
+
+
+static int anim_percentage(AnimationProgress dist_normalized, int max) {
+  int i = (int)(float)(((float)dist_normalized / (float)ANIMATION_NORMALIZED_MAX) * (float)max);
+  //APP_LOG(APP_LOG_LEVEL_INFO, "anim pc: %d", i);
+  return i;
+}
+
+static void bezel_update(Animation *anim, AnimationProgress dist_normalized) {
+
+  s_anim_angle = anim_percentage(dist_normalized, 180);
+  //APP_LOG(APP_LOG_LEVEL_INFO, "Anim s_radius: %d", s_radius);
+  layer_mark_dirty(s_segment_layer);
+
+}
+           
+           
+static void tide_radius_update(Animation *anim, AnimationProgress dist_normalized) {
+
+  s_radius = anim_percentage(dist_normalized, FINAL_RADIUS);
+  //APP_LOG(APP_LOG_LEVEL_INFO, "Anim s_radius: %d", s_radius);
+  layer_mark_dirty(s_segment_layer);
+
+}
+
+static void tide_hand_update(Animation *anim, AnimationProgress dist_normalized) {
+
+  s_anim_next_tide = anim_percentage(dist_normalized, next_tide);
+  //APP_LOG(APP_LOG_LEVEL_INFO, "Anim s_anim_next_tide: %d", s_anim_next_tide);
+  layer_mark_dirty(s_segment_layer);
+
+}
+
+static void rising_offset_update(Animation *anim, AnimationProgress dist_normalized) {
+
+  rising_offset = anim_percentage(dist_normalized, RISING_OFFSET);
+  //APP_LOG(APP_LOG_LEVEL_INFO, "Anim s_radius: %d", s_radius);
+  layer_mark_dirty(s_segment_layer);
+
+}
+
+

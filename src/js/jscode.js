@@ -69,18 +69,38 @@ function getTide() {
       city = 'Perth';
     else if (state=='SA_')
       city = 'Adelaide';
-      
+  
   var url2 = turl1 + tcode + turl2 + city + turl3 + d.getDate() + "-" + (d.getMonth()+1) + "-" + d.getFullYear();
   console.log(url2);
-    xhrRequest(url2, 'GET', 
-    function(responseText) {
-
-      // Assemble dictionary using our keys
-      // var response = responseText;
-    HTMLTable(responseText);
+  var stored_url2 = localStorage.getItem('url2') ? localStorage.getItem('url2') : ''; 
+  var stored_responseText = localStorage.getItem('responseText') ? localStorage.getItem('responseText') : ''; 
+  if (url2 == stored_url2)  {
+    console.log("Cache hit!");
+    HTMLTable(stored_responseText);
     sendResponse();
-    }      
-  );
+    } else {
+      xhrRequest(url2, 'GET', 
+      function(responseText) {
+        // Assemble dictionary using our keys
+        // var response = responseText;
+      HTMLTable(responseText);
+      sendResponse();
+      localStorage.setItem('url2', url2);
+      localStorage.setItem('responseText', responseText);
+      }      
+    );
+    }
+  
+  /* DEBUG - to avoid needlessly calling bom URL
+  tdiff = 300;
+  highlow = "High";
+  tpc = 50;
+  lastLevel = "1.0m";
+  nextLevel = "2.0m";
+  followingLevel = "3.0m";
+  sendResponse();
+  */
+  
 }
 var r = [];
 var s = [];
